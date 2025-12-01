@@ -1,125 +1,172 @@
-# bot.py
+#!/usr/bin/env python3
+"""
+Discord bot that uses Wolfram|Alpha for answers and returns only the 'Result' pod.
+
+Usage:
+  - Mention the bot with a prompt (e.g. @Bot integrate x^2)
+  - Or use: !ask <prompt>
+
+Requirements:
+  pip install -U discord.py python-dotenv requests
+Place DISCORD_TOKEN and WOLFRAM_APP_ID in a .env file (never hardcode keys).
+"""
+
 import os
 import asyncio
-import logging
-from g4f.client import AsyncClient
-import discord
+import textwrap
+import requests
+from dotenv import load_dotenv
 from discord.ext import commands
-from discord import app_commands
+import discord
 
-logging.basicConfig(level=logging.INFO)
-
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")  # put your bot token in env var
+load_dotenv()
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+WOLFRAM_APP_ID = os.getenv("WOLFRAM_APP_ID")
 
 if not DISCORD_TOKEN:
-    raise RuntimeError("Set DISCORD_TOKEN environment variable before running.")
+    raise SystemExit("DISCORD_TOKEN missing in environment (.env) — create a Discord bot and add token to .env")
+if not WOLFRAM_APP_ID:
+    raise SystemExit("WOLFRAM_APP_ID missing in environment (.env) — obtain one from Wolfram|Alpha Developer Portal")
 
+# Discord bot setup
 intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# --- Utility to call g4f ---
-async def ask_g4f(question: str, model: str = "gpt-4o", timeout: int = 60) -> str:
+
+def split_into_chunks(s: str, chunk_size: int = 1900):
+    """Split a long string into Discord-friendly chunks."""
+    for i in range(0, len(s), chunk_size):
+        yield s[i:i + chunk_size]
+
+
+def _call_wolfram_blocking(prompt_text: str) -> str:
     """
-    Ask g4f AsyncClient a question and return the assistant text.
-    Creates and closes a client per call to be safe.
+    Wolfram call that returns ONLY the main answer (the 'Result' pod).
+    Falls back to v1/result if no Result pod is found.
     """
-    client = AsyncClient()
     try:
-        # call the same API shape you posted
-        response = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": question}],
-            ),
-            timeout=timeout,
+        base = "https://api.wolframalpha.com/v2/query"
+        params = {
+            "input": prompt_text,
+            "appid": WOLFRAM_APP_ID,
+            "output": "json",
+        }
+        r = requests.get(base, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        return f"(error contacting Wolfram|Alpha: {e})"
+
+    qr = data.get("queryresult", {})
+    pods = qr.get("pods", [])
+    success = qr.get("success", False)
+
+    # 1. Try to find the "Result" pod only (case-insensitive)
+    for pod in pods:
+        title = pod.get("title", "")
+        if title and title.strip().lower() == "result":
+            subpods = pod.get("subpods", [])
+            for sp in subpods:
+                text = sp.get("plaintext")
+                if text and text.strip():
+                    return text.strip()
+
+    # 2. If no "Result" pod found → fallback to Wolfram|Alpha simple result endpoint (/v1/result)
+    try:
+        simple = requests.get(
+            "https://api.wolframalpha.com/v1/result",
+            params={"i": prompt_text, "appid": WOLFRAM_APP_ID},
+            timeout=8,
         )
-        # attempt to extract text safely
+        if simple.status_code == 200 and simple.text.strip():
+            return simple.text.strip()
+    except Exception:
+        pass
+
+    # 3. As a last resort, try to return the first meaningful plaintext found from any pod
+    for pod in pods:
+        subpods = pod.get("subpods", [])
+        for sp in subpods:
+            pt = sp.get("plaintext")
+            if pt and pt.strip():
+                return pt.strip()
+
+    return "(No answer found.)"
+
+
+async def _respond_with_wolfram(channel: discord.abc.Messageable, reply_func, prompt: str):
+    """Call Wolfram (in a thread) and send the response back using reply_func."""
+    async with channel.typing():
         try:
-            return response.choices[0].message.content
-        except Exception:
-            # fallback to string convert if structure differs
-            return str(response)
-    finally:
-        # close client if it supports aclose()
-        aclose = getattr(client, "aclose", None)
-        if aclose:
-            await aclose()
+            result = await asyncio.to_thread(_call_wolfram_blocking, prompt)
+        except Exception as e:
+            await reply_func(f"Error calling Wolfram|Alpha API: {e}")
+            return
+
+    if not result:
+        await reply_func("Wolfram|Alpha returned an empty response.")
+        return
+
+    for chunk in split_into_chunks(result):
+        await channel.send(chunk)
 
 
-# --- Sync app commands on ready ---
+@bot.command(name='ask')
+async def ask(ctx: commands.Context, *, prompt: str = None):
+    """Legacy command-style interface. Kept for backward compatibility."""
+    if not prompt:
+        await ctx.reply("Usage: `!ask <your question>` — you didn't provide a prompt.")
+        return
+    await _respond_with_wolfram(ctx.channel, ctx.reply, prompt)
+
+
 @bot.event
 async def on_ready():
-    # sync slash commands to Discord (will create/update them)
-    try:
-        await bot.tree.sync()
-        logging.info("Slash commands synced.")
-    except Exception as e:
-        logging.exception("Failed to sync slash commands: %s", e)
-    logging.info(f"Logged in as {bot.user} (id: {bot.user.id})")
+    print(f"Logged in as {bot.user} (id: {bot.user.id})")
+    print("Ready to accept mentions or !ask <prompt>")
+
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Ignore messages from the bot itself
-    if message.author == bot.user:
+    """Handle regular messages and detect mentions of the bot."""
+    if message.author.bot:
         return
 
-    # --- Reply when the bot is mentioned ---
-    if bot.user in message.mentions:
-        # Remove the mention text and keep the actual question
-        content = message.content.replace(f"<@{bot.user.id}>", "").strip()
+    if message.mentions and bot.user in message.mentions:
+        content = message.content
+        # remove forms of mention
+        content = content.replace(f"<@{bot.user.id}>", "")
+        content = content.replace(f"<@!{bot.user.id}>", "")
+        content = content.lstrip()
+        content = content.lstrip(',:- ')
+        content = content.strip()
 
-        # If they only tagged the bot but wrote nothing
-        if content == "":
-            await message.reply("Hi! Ask me something 🙂")
+        if not content:
+            await message.reply("Usage: mention me with a prompt, e.g. `@YourBot what's the weather?`")
             return
 
-        # Call the model
-        reply = await ask_g4f(content)
-        await message.reply(reply)
+        await _respond_with_wolfram(message.channel, message.reply, content)
         return
 
-    # Make sure commands still work (!ask, etc.)
     await bot.process_commands(message)
 
 
-# --- Slash command ---
-@bot.tree.command(name="ask", description="Ask the model a question")
-@app_commands.describe(question="What you want to ask the model")
-async def slash_ask(interaction: discord.Interaction, question: str):
-    await interaction.response.defer()  # defer the response (shows "thinking...")
-    try:
-        answer = await ask_g4f(question)
-        # Discord messages are limited; trim if necessary
-        if not answer:
-            answer = "_(no answer returned)_"
-        if len(answer) > 1900:
-            # send a short preview and attach remainder as a file
-            preview = answer[:1900] + "\n\n(remaining output attached as .txt)"
-            await interaction.followup.send(preview)
-            # attach remainder
-            remainder = answer[1900:]
-            await interaction.followup.send(file=discord.File(fp=discord.File(io.BytesIO(remainder.encode()), filename="remainder.txt").fp, filename="remainder.txt"))
-        else:
-            await interaction.followup.send(answer)
-    except Exception as e:
-        await interaction.followup.send(f"Error calling model: {e}")
+@bot.command(name='help')
+async def help_cmd(ctx: commands.Context):
+    help_text = textwrap.dedent(
+        """
+        **Simple Wolfram|Alpha Discord Bot**
+        Commands:
+          `@Bot <prompt>` — Mention the bot with your question (preferred).
+          `!ask <prompt>` — (legacy) Ask Wolfram|Alpha a question.
+          `!help` — Show this message.
+
+        Setup notes: put DISCORD_TOKEN and WOLFRAM_APPID into a .env file.
+        """
+    )
+    await ctx.send(help_text)
 
 
-# --- Prefix command (text command) ---
-@bot.command(name="ask")
-async def text_ask(ctx: commands.Context, *, question: str):
-    """Use: !ask What is quantum computing?"""
-    # give feedback so user knows bot is working
-    message = await ctx.reply("Thinking... ⏳")
-    try:
-        answer = await ask_g4f(question)
-        if not answer:
-            answer = "_(no answer returned)_"
-        # edit the "Thinking..." message with the answer
-        await message.edit(content=answer)
-    except Exception as e:
-        await message.edit(content=f"Error calling model: {e}")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     bot.run(DISCORD_TOKEN)
