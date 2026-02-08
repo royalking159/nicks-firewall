@@ -11,7 +11,7 @@ from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
 
-# ----------------- CONFIG -----------------
+# ----------------- CONFIG ------------------------
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 MOD_LOG_CHANNEL_ID = int(os.getenv("MOD_LOG_CHANNEL_ID", "0"))
@@ -178,6 +178,8 @@ async def remove_lockdown(guild:discord.Guild):
     return f"Unlock attempted. Restored ~{restored} channels; failed ~{failed}."
 
 # ----------------- SLASH COMMANDS -----------------
+
+#---------------------- PING -----------------------
 @tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
     api_latency = round(bot.latency * 1000)
@@ -190,6 +192,11 @@ async def ping(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+#-------------------- ... ---------------------------
+@tree.command(name="say", description="(make the bot say something")
+async def say(ctx, *, text):
+    await ctx.send(text)
+#-------------------- LOCKDOWN -----------------------
 @tree.command(name="lockdown", description="Lock the server")
 @app_commands.describe(level="Level of lockdown", duration="Duration like 1h30m", reason="Reason for lockdown")
 @app_commands.choices(level=[app_commands.Choice(name=x.upper(),value=x) for x in LOCKDOWN_LEVELS])
@@ -201,6 +208,7 @@ async def lockdown(interaction: discord.Interaction, level:app_commands.Choice[s
     affected = await apply_lockdown(interaction.guild, level.value, reason or "No reason provided", duration=seconds)
     await interaction.followup.send(f"✅ Lockdown applied ({level.value.upper()}). Affected channels: {len(affected) if isinstance(affected,list) else 0}\n{affected if isinstance(affected,list) else ''}", ephemeral=True)
 
+#---------------------- UNLOCK ------------------------
 @tree.command(name="unlock", description="Unlock the server")
 async def unlock(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -209,6 +217,7 @@ async def unlock(interaction: discord.Interaction):
     result = await remove_lockdown(interaction.guild)
     await interaction.followup.send(result, ephemeral=True)
 
+#-------------------- WARN ----------------------------
 @tree.command(name="warn", description="Warn a user")
 @app_commands.describe(user="User to warn", reason="Reason for warning")
 async def warn(interaction: discord.Interaction, user: discord.Member, reason:str=None):
@@ -222,7 +231,7 @@ async def warn(interaction: discord.Interaction, user: discord.Member, reason:st
     embed=discord.Embed(title="User Warned", description=f"{user} warned.\nReason: {reason or 'No reason provided'}", color=discord.Color.orange())
     await interaction.response.send_message(embed=embed)
     await send_mod_log(embed)
-
+#---------------------- KICK ----------------------------
 @tree.command(name="kick", description="Kick a user")
 @app_commands.describe(user="User to kick", reason="Reason for kick")
 async def kick(interaction: discord.Interaction, user: discord.Member, reason:str=None):
@@ -236,7 +245,7 @@ async def kick(interaction: discord.Interaction, user: discord.Member, reason:st
         await send_mod_log(embed)
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to kick: {e}", ephemeral=True)
-
+#----------------------- BAN ---------------------------
 @tree.command(name="ban", description="Ban a user")
 @app_commands.describe(user="User to ban", reason="Reason for ban")
 async def ban(interaction: discord.Interaction, user: discord.Member, reason:str=None):
@@ -250,7 +259,7 @@ async def ban(interaction: discord.Interaction, user: discord.Member, reason:str
         await send_mod_log(embed)
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to ban: {e}", ephemeral=True)
-
+#---------------------- MUTE ---------------------------
 @tree.command(name="mute", description="Mute a user")
 @app_commands.describe(user="User to mute", reason="Reason for mute")
 async def mute(interaction: discord.Interaction, user: discord.Member, reason:str=None):
@@ -269,7 +278,7 @@ async def mute(interaction: discord.Interaction, user: discord.Member, reason:st
         await send_mod_log(embed)
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to mute: {e}", ephemeral=True)
-
+#-------------------------- PURGE --------------------
 @tree.command(name="purge", description="Purge messages")
 @app_commands.describe(amount="Number of messages to delete")
 async def purge(interaction: discord.Interaction, amount:int):
@@ -282,7 +291,7 @@ async def purge(interaction: discord.Interaction, amount:int):
         await send_mod_log(embed)
     except Exception as e:
         await interaction.response.send_message(f"❌ Failed to purge: {e}", ephemeral=True)
-
+#------------------------- EDIT REASON -----------------
 @tree.command(name="editreason", description="Edit a reason for a mod action")
 @app_commands.describe(user="Target user", action_type="Action type (warn/ban/kick/mute)", number="Action ID number", new_reason="New reason")
 async def editreason(interaction: discord.Interaction, user:discord.Member, action_type:str, number:int, new_reason:str):
