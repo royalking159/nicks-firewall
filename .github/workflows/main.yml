@@ -1,0 +1,33 @@
+name: Discord Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */5 * * *"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install discord.py python-dotenv
+
+      - name: Run bot
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          MOD_LOG_CHANNEL_ID: ${{ secrets.MOD_LOG_CHANNEL_ID }}
+          GENERAL_CHANNEL_ID: ${{ secrets.GENERAL_CHANNEL_ID }}
+          STAFF_CHANNEL_IDS: ${{ secrets.STAFF_CHANNEL_IDS }}
+        run: |
+          python main.py
