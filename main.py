@@ -178,17 +178,6 @@ async def remove_lockdown(guild:discord.Guild):
     return f"Unlock attempted. Restored ~{restored} channels; failed ~{failed}."
 
 # ----------------- SLASH COMMANDS -----------------
-# test
-@tree.command(name="test name", description="test disc")
-async def test(interaction: discord.Interaction):
-
-    embed = discord.Embed(
-        title="test name",
-        color=discord.Color.green()
-    )
-    embed.add_field(name="test", inline=True)
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 #---------------------- PING -----------------------
 @tree.command(name="ping", description="Check bot latency")
 async def ping(interaction: discord.Interaction):
